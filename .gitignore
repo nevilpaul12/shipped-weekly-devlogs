@@ -1,0 +1,25 @@
+# Python virtual environment
+backend/venv/
+venv/
+.venv/
+env/
+.env
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node.js / Frontend dependencies
+node_modules/
+dist/
+build/
+.next/
+out/
+.nuxt/
+.cache/
+
+# OS metadata
+.DS_Store
+Thumbs.db
