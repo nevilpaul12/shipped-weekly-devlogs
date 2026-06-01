@@ -1,9 +1,12 @@
 from fastapi import FastAPI,Depends,Header
 from sqlalchemy.orm import Session
 from database import engine,sessionLocal
-from model import DevLogs as DevLogsSchema
+from model import DevLogs as DevLogsSchema, DevLogsResponse, UserCreate, UserResponse
+from fastapi.security import OAuth2PasswordRequestForm
+import auth
+from datetime import timedelta
 import db_models
-
+from fastapi import HTTPException, status
 db_models.Base.metadata.create_all(bind=engine)
 
 # add cors middleware
@@ -32,34 +35,58 @@ def get_db():
     finally:
         db.close()
 
+@app.post("/signup", response_model=UserResponse)
+def signup(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(db_models.User).filter(db_models.User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    hashed_password = auth.get_password_hash(user.password)
+    new_user = db_models.User(username=user.username, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.post("/token")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(db_models.User).filter(db_models.User.username == form_data.username).first()
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = auth.create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
 #get all logs
-@app.get("/logs")
+@app.get("/logs", response_model=list[DevLogsResponse])
 def get_logs(db:Session = Depends(get_db)):
     logs_from_db = db.query(db_models.DevLogs).all()
     return logs_from_db
 
 #get a log by id
-@app.get("/logs/{id}")
+@app.get("/logs/{id}", response_model=DevLogsResponse)
 def get_logs_by_id(id:int,db:Session = Depends(get_db)):
     log_product = db.query(db_models.DevLogs).filter(db_models.DevLogs.id == id).first()
     return log_product
 
-#create a log if only isAdmin = true in headers
-@app.post("/logs")
-def create_log(log: DevLogsSchema,db:Session = Depends(get_db),isAdmin:bool = Header(default=False)):
-    if not isAdmin:
-        return {"message":"Unauthorized"}
+#create a log if authenticated
+@app.post("/logs", response_model=DevLogsResponse)
+def create_log(log: DevLogsSchema, db: Session = Depends(get_db), current_user: db_models.User = Depends(auth.get_current_user)):
     log_from_db = db_models.DevLogs(**log.dict())
     db.add(log_from_db)
     db.commit()
     db.refresh(log_from_db)
     return log_from_db
 
-#update a log if only isAdmin = true in headers
-@app.put("/logs/{id}")
-def update_log(id:int,log: DevLogsSchema,db:Session = Depends(get_db),isAdmin:bool = Header(default=False)):
-    if not isAdmin:
-        return {"message":"Unauthorized"}
+#update a log if authenticated
+@app.put("/logs/{id}", response_model=DevLogsResponse)
+def update_log(id: int, log: DevLogsSchema, db: Session = Depends(get_db), current_user: db_models.User = Depends(auth.get_current_user)):
     log_from_db = db.query(db_models.DevLogs).filter(db_models.DevLogs.id == id).first()
     if log_from_db is None:
         return {"message":"Log not found"}
@@ -72,11 +99,9 @@ def update_log(id:int,log: DevLogsSchema,db:Session = Depends(get_db),isAdmin:bo
     db.refresh(log_from_db)
     return log_from_db
 
-#delete a log if only isAdmin = true in headers
+#delete a log if authenticated
 @app.delete("/logs/{id}")
-def delete_log(id:int,db:Session = Depends(get_db),isAdmin:bool = Header(default=False)):
-    if not isAdmin:
-        return {"message":"Unauthorized"}
+def delete_log(id: int, db: Session = Depends(get_db), current_user: db_models.User = Depends(auth.get_current_user)):
     log_from_db = db.query(db_models.DevLogs).filter(db_models.DevLogs.id == id).first()
     if log_from_db is None:
         return {"message":"Log not found"}
